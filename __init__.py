@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -280,6 +281,20 @@ def _handle_cli(args):
             "import runpy, sys\n"
             f"sys.argv = [sys.argv[0]] + sys.argv[1:]\n"
             f"runpy.run_path({str(HERE / 'reminder.py')!r}, run_name='__main__')\n", encoding="utf-8")
+        # Idempotent: önceki meeting-notes cron işlerini sil, sonra yeniden kur
+        lst = subprocess.run([exe, "cron", "list", "--all"], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace").stdout
+        last_id = None
+        for line in lst.splitlines():
+            m = re.match(r"^\s*([0-9a-f]{12})\s+\[", line)
+            if m:
+                last_id = m.group(1)
+                continue
+            m = re.match(r"^\s*Name:\s+(.*)$", line)
+            if m and last_id and m.group(1).strip().startswith("meeting-notes"):
+                subprocess.run([exe, "cron", "remove", last_id], capture_output=True)
+                print("Eski iş silindi:", last_id)
+                last_id = None
         failed = 0
         for t in [x.strip() for x in args.times.split(",") if x.strip()]:
             hh, mm = t.split(":")
