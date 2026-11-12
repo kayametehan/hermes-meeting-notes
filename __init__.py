@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import os
 import threading
 import time
 import uuid
@@ -44,13 +45,17 @@ def _notify(text: str) -> None:
 
 
 # ---------------------------------------------------------------- iş hattı
-def run_pipeline(llm, job_id: str, audio: str, title: str, notify: bool) -> dict:
+def run_pipeline(llm, job_id: str, audio: str, title: str, notify: bool, transcript_jsonl: str = "") -> dict:
     cfg = store.config()
     mid = job_id
     folder = store.meeting_dir(mid)
     jsonl = folder / "transcript.jsonl"
     try:
-        with _gpu_lock:
+        if transcript_jsonl and Path(transcript_jsonl).is_file():
+            segs = [json.loads(l) for l in Path(transcript_jsonl).read_text(encoding="utf-8").splitlines() if l.strip()]
+            jsonl.write_text(Path(transcript_jsonl).read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+          with _gpu_lock:
             store.update_job(job_id, status="transcribing", progress=0.0)
             last = [0.0]
 
@@ -93,12 +98,13 @@ def _make_tools(ctx):
             return _err(f"Ses dosyası bulunamadı: {audio!r}")
         title = (args.get("title") or Path(audio).stem).strip()
         wait = bool(args.get("wait", False))
+        tjson = (args.get("transcript_path") or "").strip()
         job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
         store.update_job(job_id, status="queued", title=title, audio=audio, progress=0.0,
                          started=datetime.now().isoformat(timespec="seconds"))
         audio = str(Path(audio).expanduser())
         if wait:
-            r = run_pipeline(ctx.llm, job_id, audio, title, notify=False)
+            r = run_pipeline(ctx.llm, job_id, audio, title, notify=False, transcript_jsonl=tjson)
             return _ok(job_id=job_id, status="done", summary_markdown=r["markdown"], new_tasks=r["new_tasks"])
 
         def bg():
@@ -159,6 +165,7 @@ def _make_tools(ctx):
             "audio_path": {"type": "string", "description": "Ses/video dosyasının tam yolu (ogg, m4a, mp3, wav, mp4...)"},
             "title": {"type": "string", "description": "Toplantı başlığı (opsiyonel)"},
             "wait": {"type": "boolean", "description": "true ise bitene kadar bekler (sadece kısa kayıtlar için)"},
+            "transcript_path": {"type": "string", "description": "Hazır transkript (jsonl) yolu; verilirse yazıya çevirme atlanır"},
         },
         "meeting_status": {"job_id": {"type": "string"}},
         "meeting_tasks": {
@@ -226,6 +233,196 @@ def _make_stt_provider():
     return TurkishWhisper()
 
 
+# ---------------------------------------------------------------- Gelen kutusu klasörü (bot)
+AUDIO_EXT = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".aac", ".flac", ".mp4", ".webm", ".wma", ".amr", ".mkv"}
+_watch_started = False
+
+
+def inbox_dir() -> Path:
+    cfg = store.config()
+    d = Path(os.path.expandvars(cfg.get("inbox_dir") or "")).expanduser() if cfg.get("inbox_dir") \
+        else Path.home() / "Toplanti-Inbox"
+    for sub in ("", "isleniyor", "islenen", "ozetler", "hatali"):
+        (d / sub).mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _toast(title: str, msg: str) -> None:
+    """Masaüstü bildirimi (en iyi çaba; başarısız olursa sessiz geçer)."""
+    title, msg = title.replace("'", " ")[:80], msg.replace("'", " ").replace("\n", " ")[:200]
+    try:
+        if sys.platform == "win32":
+            ps = ("[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;"
+                  "$x=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent('ToastText02');"
+                  f"$x.GetElementsByTagName('text')[0].AppendChild($x.CreateTextNode('{title}'))|Out-Null;"
+                  f"$x.GetElementsByTagName('text')[1].AppendChild($x.CreateTextNode('{msg}'))|Out-Null;"
+                  "$n=[Windows.UI.Notifications.ToastNotification]::new($x);"
+                  "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($n)")
+            subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, timeout=20)
+        elif sys.platform == "darwin":
+            subprocess.run(["osascript", "-e", f'display notification "{msg}" with title "{title}"'],
+                           capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def _write_tasks_file(inbox: Path) -> None:
+    body = "# Açık yapılacaklar\n\n" + store.format_tasks(store.list_tasks()) + "\n"
+    (inbox / "Yapilacaklar.md").write_text(body, encoding="utf-8")
+
+
+def _process_inbox_file(llm, inbox: Path, f: Path) -> None:
+    claimed = inbox / "isleniyor" / f.name
+    try:
+        os.replace(f, claimed)  # atomik sahiplenme: birden fazla süreç aynı dosyayı işlemez
+    except OSError:
+        return  # başka süreç aldı ya da dosya hâlâ kilitli
+    job_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+    title = f.stem
+    store.update_job(job_id, status="queued", title=title, audio=str(claimed), progress=0.0,
+                     started=datetime.now().isoformat(timespec="seconds"), source="inbox")
+    try:
+        r = run_pipeline(llm, job_id, str(claimed), title, notify=bool(store.config().get("notify_target")))
+        (inbox / "ozetler" / f"{title}.md").write_text(r["markdown"], encoding="utf-8")
+        os.replace(claimed, inbox / "islenen" / f.name)
+        _write_tasks_file(inbox)
+        _toast("Toplantı işlendi", f"{title}: {r['new_tasks']} yeni görev. Özet: ozetler klasöründe")
+    except Exception as e:
+        log.exception("meeting-notes inbox hatası")
+        try:
+            os.replace(claimed, inbox / "hatali" / f.name)
+        except OSError:
+            pass
+        (inbox / "hatali" / f"{title}.HATA.txt").write_text(str(e), encoding="utf-8")
+        _toast("Toplantı işlenemedi", f"{title}: {str(e)[:120]}")
+
+
+def _watch_loop(llm) -> None:
+    seen: dict = {}
+    while True:
+        try:
+            inbox = inbox_dir()
+            for f in sorted(inbox.iterdir()):
+                if not f.is_file() or f.suffix.lower() not in AUDIO_EXT or f.name.startswith((".", "~")):
+                    continue
+                st = f.stat()
+                sig = (st.st_size, st.st_mtime)
+                if seen.get(f) != sig:  # boyut/zaman değişti: kopyalama sürüyor olabilir
+                    seen[f] = sig
+                    continue
+                if time.time() - st.st_mtime < 10:
+                    continue
+                seen.pop(f, None)
+                _process_inbox_file(llm, inbox, f)
+        except Exception:
+            log.exception("meeting-notes izleyici hatası")
+        time.sleep(15)
+
+
+def start_watcher(llm) -> None:
+    global _watch_started
+    if _watch_started or not store.config().get("watch_inbox", False):
+        return
+    _watch_started = True
+    inbox_dir()
+    threading.Thread(target=_watch_loop, args=(llm,), name="meeting-inbox", daemon=True).start()
+    log.info("meeting-notes: gelen kutusu izleniyor: %s", inbox_dir())
+
+
+# ---------------------------------------------------------------- Bağımsız izleyici: hermes meeting watch
+def _latest_job_for(audio: str):
+    items = [(k, v) for k, v in store.jobs().items() if v.get("audio") == audio]
+    return sorted(items, key=lambda kv: kv[0])[-1] if items else (None, None)
+
+
+def _handle_with_hermes(inbox: Path, f: Path, exe: str) -> None:
+    """Sahiplen -> STT (bu süreçte, zaman aşımı yok) -> özet için Hermes'i çağır -> sonuçları yerleştir."""
+    claimed = inbox / "isleniyor" / f.name
+    try:
+        os.replace(f, claimed)
+    except OSError:
+        return
+    title = f.stem
+    print(f"[{datetime.now():%H:%M:%S}] İşleniyor: {f.name}", flush=True)
+    try:
+        jsonl = store.data_dir() / "stt-tmp" / (f.name + ".jsonl")
+        jsonl.parent.mkdir(parents=True, exist_ok=True)
+        engine.transcribe_file(str(claimed), jsonl, cfg=store.config())
+        prompt = ("meeting_process aracını şu argümanlarla çağır: "
+                  f"audio_path={json.dumps(str(claimed))}, transcript_path={json.dumps(str(jsonl))}, wait=true. "
+                  "Başka hiçbir şey yapma; araç bitince sadece 'tamam' yaz.")
+        r = subprocess.run([exe, "chat", "-q", prompt], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", env=engine.clean_env())
+        _, job = _latest_job_for(str(claimed))
+        if not job or job.get("status") != "done":
+            err = (job or {}).get("error") or (r.stdout + r.stderr)[-800:] or "Hermes özet aracını çağırmadı."
+            raise RuntimeError(err)
+        sp = Path(job["summary_path"])
+        (inbox / "ozetler" / f"{title}.md").write_text(sp.read_text(encoding="utf-8"), encoding="utf-8")
+        os.replace(claimed, inbox / "islenen" / f.name)
+        _write_tasks_file(inbox)
+        jsonl.unlink(missing_ok=True)
+        _toast("Toplantı işlendi", f"{title}: {job.get('new_tasks', 0)} yeni görev. Özet: ozetler klasöründe")
+        print(f"[{datetime.now():%H:%M:%S}] Bitti: {title}", flush=True)
+    except Exception as e:
+        print(f"[{datetime.now():%H:%M:%S}] HATA {title}: {e}", flush=True)
+        try:
+            os.replace(claimed, inbox / "hatali" / f.name)
+        except OSError:
+            pass
+        (inbox / "hatali" / f"{title}.HATA.txt").write_text(str(e), encoding="utf-8")
+        _toast("Toplantı işlenemedi", f"{title}: {str(e)[:120]}")
+
+
+def watch_forever() -> None:
+    exe = shutil.which("hermes") or "hermes"
+    inbox = inbox_dir()
+    print(f"Gelen kutusu izleniyor: {inbox}  (Ctrl+C ile durdur)", flush=True)
+    seen: dict = {}
+    # Önceki çalışmadan yarım kalanları geri al
+    for f in (inbox / "isleniyor").glob("*"):
+        if f.is_file():
+            os.replace(f, inbox / f.name)
+    while True:
+        try:
+            for f in sorted(inbox.iterdir()):
+                if not f.is_file() or f.suffix.lower() not in AUDIO_EXT or f.name.startswith((".", "~")):
+                    continue
+                st = f.stat()
+                sig = (st.st_size, st.st_mtime)
+                if seen.get(f) != sig:
+                    seen[f] = sig
+                    continue
+                if time.time() - st.st_mtime < 10:
+                    continue
+                seen.pop(f, None)
+                _handle_with_hermes(inbox, f, exe)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            print("izleyici hatası:", e, flush=True)
+        time.sleep(15)
+
+
+def _install_autostart() -> None:
+    exe = shutil.which("hermes")
+    if not exe:
+        print("hermes yolu bulunamadı.")
+        return
+    if sys.platform == "win32":
+        startup = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        startup.mkdir(parents=True, exist_ok=True)
+        vbs = startup / "HermesToplantiIzleyici.vbs"
+        vbs.write_text('CreateObject("WScript.Shell").Run """' + exe + '"" meeting watch", 0, False\r\n', encoding="ascii")
+        print("Otomatik başlatma eklendi:", vbs)
+        flags = 0x08000000 | 0x00000008  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        subprocess.Popen([exe, "meeting", "watch"], creationflags=flags, close_fds=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+        print("İzleyici şimdi de arka planda başlatıldı.")
+    else:
+        print("Bu sistemde elle başlat:  nohup hermes meeting watch > /tmp/meeting-watch.log 2>&1 &")
+
+
 # ---------------------------------------------------------------- CLI: hermes meeting ...
 def _setup_cli(p):
     sub = p.add_subparsers(dest="mcmd")
@@ -237,11 +434,14 @@ def _setup_cli(p):
     pr.add_argument("--transcript-only", action="store_true", help="Sadece yazıya çevir (LLM yok)")
     rm = sub.add_parser("reminders", help="Günlük hatırlatma cron işlerini kur")
     rm.add_argument("--times", default="09:00,18:00", help="Virgüllü saatler, örn 09:00,13:00,18:00")
-    rm.add_argument("--deliver", default="telegram", help="Teslim hedefi (telegram, discord, telegram:chat_id ...)")
+    rm.add_argument("--deliver", default="local", help="Teslim hedefi: local (masaüstü bildirimi + kayıt), telegram, telegram:chat_id ...")
     cf = sub.add_parser("config", help="Ayar göster/değiştir")
     cf.add_argument("key", nargs="?")
     cf.add_argument("value", nargs="?")
     sub.add_parser("tasks", help="Açık görevleri listele")
+    sub.add_parser("watch", help="Gelen kutusunu izle ve kayıtları kendiliğinden işle (arka plan botu)")
+    sub.add_parser("autostart", help="Windows açılışında izleyiciyi otomatik başlat ve şimdi başlat")
+    sub.add_parser("inbox", help="Gelen kutusu klasörünü göster/oluştur ve aç")
 
 
 def _handle_cli(args):
@@ -261,6 +461,22 @@ def _handle_cli(args):
         print("ayarlar:", json.dumps(store.config(), ensure_ascii=False))
     elif cmd == "tasks":
         print(store.format_tasks(store.list_tasks()))
+    elif cmd == "watch":
+        try:
+            watch_forever()
+        except KeyboardInterrupt:
+            print("Durduruldu.")
+    elif cmd == "autostart":
+        _install_autostart()
+    elif cmd == "inbox":
+        d = inbox_dir()
+        print("Gelen kutusu:", d)
+        print("Kayıtları bu klasöre at. Özetler: ozetler\\ , görev listesi: Yapilacaklar.md")
+        try:
+            if sys.platform == "win32":
+                os.startfile(str(d))  # noqa
+        except Exception:
+            pass
     elif cmd == "config":
         if not args.key:
             print(json.dumps(store.config(), ensure_ascii=False, indent=2))
@@ -325,6 +541,10 @@ def _handle_cli(args):
 # ---------------------------------------------------------------- giriş noktası
 def register(ctx):
     _make_tools(ctx)
+    try:
+        start_watcher(ctx.llm)
+    except Exception as e:
+        log.warning("meeting-notes: izleyici başlatılamadı: %s", e)
     try:
         ctx.register_transcription_provider(_make_stt_provider())
     except Exception as e:

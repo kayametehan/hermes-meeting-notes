@@ -15,3 +15,7 @@ hermes meeting doctor
 Write-Host "`n--- Ornek ses testi ---"
 Invoke-WebRequest "https://raw.githubusercontent.com/kayametehan/hermes-meeting-notes/main/samples/ornek-toplanti.ogg" -OutFile "$tmp\ornek.ogg"
 hermes meeting process "$tmp\ornek.ogg" --transcript-only
+Write-Host "`n--- Otomatik izleyici (gelen kutusu) ---"
+hermes meeting autostart
+hermes meeting inbox
+Write-Host "`nHAZIR: Kayitlari acilan 'Toplanti-Inbox' klasorune at; ozet 'ozetler' icinde, gorevler 'Yapilacaklar.md' dosyasinda."

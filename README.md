@@ -37,6 +37,12 @@ Başka cihaz/hesap: klasörü kopyala, aynı scripti çalıştır. Her cihazın 
 
 ## Kullanım
 
+**Bot gibi (önerilen, Telegram/sohbet gerekmez):** `hermes meeting autostart` bir arka plan izleyicisi başlatır
+(Windows'ta oturum açılışında kendiliğinden). Kayıtları `Toplanti-Inbox` klasörüne at (`hermes meeting inbox` açar):
+özet `ozetler\\`, açık görevler `Yapilacaklar.md` içinde, işlenen kayıtlar `islenen\\`, hatalılar `hatali\\` altına gider,
+bitince masaüstü bildirimi çıkar. Hatırlatmalar da masaüstü bildirimidir. Çalışması için Hermes'in model bağlantısı hazır olmalı.
+
+
 - Telegram'a kaydı **dosya/ses olarak** gönder. Hermes `meeting_process` aracını çağırır; işlem arka planda
   sürer, bitince özet + görevler aynı sohbete gelir.
 - `/yapilacaklar` ya da "yapılacaklarım ne?" → liste. "3 bitti" → tamamlar.

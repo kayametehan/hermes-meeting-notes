@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS / Linux kurulumu:  bash install.sh [09:00,18:00] [telegram]
 set -euo pipefail
-TIMES="${1:-09:00,18:00}"; DELIVER="${2:-telegram}"
+TIMES="${1:-09:00,18:00}"; DELIVER="${2:-local}"
 command -v hermes >/dev/null || { echo "hermes bulunamadı"; exit 1; }
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
 export PATH="$HOME/.local/bin:$PATH"

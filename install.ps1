@@ -2,7 +2,7 @@
 # Önkoşul: Hermes Agent kurulu olmalı (hermes komutu çalışmalı).
 param(
   [string]$Times = "09:00,18:00",
-  [string]$Deliver = "telegram"
+  [string]$Deliver = "local"
 )
 $ErrorActionPreference = "Stop"
 

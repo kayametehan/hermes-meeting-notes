@@ -3,6 +3,8 @@
   "language": "tr",
   "device": "auto",
   "beam_size": 5,
-  "notify_target": "telegram",
-  "chunk_chars": 14000
+  "notify_target": "",
+  "chunk_chars": 14000,
+  "inbox_dir": "",
+  "watch_inbox": true
 }
