@@ -240,7 +240,10 @@ def _handle_cli(args):
         engine.prefetch_model(print)
         print("Hazır. Model:", engine.resolve_model(store.config()))
     elif cmd == "doctor":
-        print("venv hazır:", engine.is_ready(), "|", engine.venv_python())
+        err = engine.import_error()
+        print("venv hazır:", not err, "|", engine.venv_python())
+        if err:
+            print("içe aktarma hatası:\n" + err)
         print("ffmpeg gerekmiyor (PyAV ile çözülüyor).")
         print("hermes send:", bool(shutil.which("hermes")))
         print("ayarlar:", json.dumps(store.config(), ensure_ascii=False))

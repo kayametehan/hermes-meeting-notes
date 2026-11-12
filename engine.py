@@ -35,12 +35,18 @@ def resolve_model(cfg: dict) -> str:
     return MODELS.get(m, m)  # takma ad ya da doğrudan HF repo / yerel klasör
 
 
-def is_ready() -> bool:
+def import_error() -> str:
+    """Boş string = sorun yok; aksi halde içe aktarma hatasının sonu."""
     p = venv_python()
     if not p.exists():
-        return False
-    r = subprocess.run([str(p), "-c", "import faster_whisper, av"], capture_output=True)
-    return r.returncode == 0
+        return "venv yok: " + str(p)
+    r = subprocess.run([str(p), "-c", "import faster_whisper, av"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return "" if r.returncode == 0 else (r.stderr or r.stdout)[-1500:]
+
+
+def is_ready() -> bool:
+    return import_error() == ""
 
 
 def _run(cmd, log):
@@ -84,8 +90,13 @@ def setup(log=print) -> None:
         _run(py + ["-m", "venv", str(vd)], log)
         _run([str(venv_python()), "-m", "pip", "install", "-q", "--upgrade", "pip"], log)
         _run([str(venv_python()), "-m", "pip", "install", "-q"] + REQUIREMENTS, log)
-    if not is_ready():
-        raise RuntimeError("Ortam kuruldu ama faster-whisper içe aktarılamıyor.")
+    err = import_error()
+    if err:
+        hint = ""
+        if IS_WIN and ("DLL" in err or "dll" in err):
+            hint = ("\nİpucu: Microsoft Visual C++ Redistributable eksik olabilir: "
+                    "winget install Microsoft.VCRedist.2015+.x64")
+        raise RuntimeError("Ortam kuruldu ama faster-whisper içe aktarılamıyor:\n" + err + hint)
     log("Ortam kuruldu.")
 
 
