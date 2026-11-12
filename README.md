@@ -8,6 +8,11 @@ Telegram'a (ya da Hermes'in bağlı olduğu herhangi bir kanala) gönderdiğin t
 
 ## Kurulum
 
+**Windows, tek komut (git gerekmez; kurar, günceller, kendini test eder):**
+```powershell
+irm https://raw.githubusercontent.com/kayametehan/hermes-meeting-notes/main/get.ps1 | iex
+```
+
 **Windows (tek komut, PowerShell):**
 ```powershell
 git clone https://github.com/kayametehan/hermes-meeting-notes; cd hermes-meeting-notes; powershell -ExecutionPolicy Bypass -File .\install.ps1
