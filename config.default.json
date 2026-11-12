@@ -1,0 +1,8 @@
+{
+  "model": "turbo",
+  "language": "tr",
+  "device": "auto",
+  "beam_size": 5,
+  "notify_target": "telegram",
+  "chunk_chars": 14000
+}

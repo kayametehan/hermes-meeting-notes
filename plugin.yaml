@@ -1,0 +1,14 @@
+name: meeting-notes
+label: Toplantı Notları
+kind: standalone
+version: 0.1.0
+description: >
+  Toplantı ses kayıtlarını Türkçe'ye optimize Whisper ile yerelde metne çevirir,
+  özeti/kararları/yapılacakları Hermes'in kendi modeliyle çıkarır, görevleri saklar
+  ve belirlenen saatlerde hatırlatır. Windows, macOS ve Linux'ta çalışır.
+author: kayametehan
+license: MIT
+provides_tools:
+  - meeting_process
+  - meeting_status
+  - meeting_tasks
