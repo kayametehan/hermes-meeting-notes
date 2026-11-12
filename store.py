@@ -1,6 +1,7 @@
 """Disk durumu: görevler, toplantılar, işler. Sadece standart kütüphane (hatırlatıcı betiği de kullanır)."""
 import json
 import os
+import sys
 import threading
 import uuid
 from datetime import datetime
@@ -11,7 +12,20 @@ _lock = threading.RLock()
 
 
 def hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    """Hermes veri klasörü. Windows varsayılanı %LOCALAPPDATA%\\hermes, diğerlerinde ~/.hermes."""
+    env = (os.environ.get("HERMES_HOME") or "").strip()
+    if env:
+        return Path(os.path.expandvars(env)).expanduser()
+    try:  # Hermes içinden çalışırken kesin cevap
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home())
+    except Exception:
+        pass
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "hermes"
+        legacy = Path.home() / ".hermes"
+        return base if base.exists() or not legacy.exists() else legacy
+    return Path.home() / ".hermes"
 
 
 def data_dir() -> Path:

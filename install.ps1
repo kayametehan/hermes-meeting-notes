@@ -17,7 +17,12 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
 }
 
-$hermesHome = if ($env:HERMES_HOME) { $env:HERMES_HOME } else { Join-Path $env:USERPROFILE ".hermes" }
+# Hermes veri klasörü: HERMES_HOME > %LOCALAPPDATA%\hermes (Windows varsayılanı) > %USERPROFILE%\.hermes
+if ($env:HERMES_HOME) { $hermesHome = $env:HERMES_HOME }
+elseif (Test-Path (Join-Path $env:LOCALAPPDATA "hermes")) { $hermesHome = Join-Path $env:LOCALAPPDATA "hermes" }
+elseif (Test-Path (Join-Path $env:USERPROFILE ".hermes")) { $hermesHome = Join-Path $env:USERPROFILE ".hermes" }
+else { $hermesHome = Join-Path $env:LOCALAPPDATA "hermes" }
+Write-Host "Hermes klasörü: $hermesHome"
 $dest = Join-Path $hermesHome "plugins\meeting-notes"
 if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
 New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
