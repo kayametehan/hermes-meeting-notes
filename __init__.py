@@ -107,17 +107,28 @@ def _make_tools(ctx):
             except Exception:
                 pass
         threading.Thread(target=bg, name=f"meeting-{job_id}", daemon=True).start()
-        return _ok(job_id=job_id, status="started",
-                   note="Arka planda işleniyor. Bitince özet otomatik gönderilir; durum için meeting_status. "
-                        "Kullanıcıya şimdi sadece 'işleme alındı' de, uzun kayıtlarda süre kaydın 1/3'ü–1 katı olabilir.")
+        if store.config().get("notify_target"):
+            note = ("Arka planda işleniyor. Bitince özet otomatik gönderilir; durum için meeting_status. "
+                    "Kullanıcıya şimdi sadece 'işleme alındı' de.")
+        else:
+            note = ("Arka planda işleniyor. Otomatik bildirim YOK: kullanıcıya bitince haber verilmeyecek. "
+                    "Kullanıcı sorunca meeting_status çağır; status=done ise summary_markdown alanını göster. "
+                    "Uzun kayıtlarda süre kaydın 1/3'ü ile 1 katı arasında olabilir.")
+        return _ok(job_id=job_id, status="started", note=note)
 
     def meeting_status(args: dict, **_):
         js = store.jobs()
         jid = (args.get("job_id") or "").strip()
+        def with_summary(k, v):
+            v = {"job_id": k, **v}
+            sp = v.get("summary_path")
+            if v.get("status") == "done" and sp and Path(sp).is_file():
+                v["summary_markdown"] = Path(sp).read_text(encoding="utf-8")
+            return v
         if jid:
-            return _ok(job=js.get(jid)) if jid in js else _err("Böyle bir iş yok.")
+            return _ok(job=with_summary(jid, js[jid])) if jid in js else _err("Böyle bir iş yok.")
         recent = sorted(js.items(), key=lambda kv: kv[0], reverse=True)[:5]
-        return _ok(jobs=[{"job_id": k, **v} for k, v in recent])
+        return _ok(jobs=[with_summary(k, v) for k, v in recent])
 
     def meeting_tasks(args: dict, **_):
         action = args.get("action", "list")

@@ -9,9 +9,9 @@ Kullanıcı bir toplantı ses kaydı (ses notu, m4a/mp3/ogg/wav dosyası, video)
 
 1. Dosyanın yolunu mesajdan/ekten al. Metne çevrilmiş kısa bir ses notu gelmişse ve bu bir toplantı
    kaydı değilse, normal konuşma gibi cevap ver; araç çağırma.
-2. `meeting_process(audio_path=..., title=...)` çağır. Varsayılan arka planda çalışır; bitince özet
-   kullanıcıya otomatik gönderilir. Kullanıcıya sadece kısa bir "işleme aldım, bitince özet gelecek"
-   de. Aynı kaydı tekrar tekrar işleme.
+2. `meeting_process(audio_path=..., title=...)` çağır. Varsayılan arka planda çalışır. Yanıttaki `note`
+   alanını oku: otomatik bildirim yoksa (Telegram bağlı değil) kullanıcıya "işleme aldım, durumu sorabilirsin"
+   de; sorunca `meeting_status` çağır, bitmişse `summary_markdown`'ı göster. Aynı kaydı tekrar tekrar işleme.
 3. İlerleme sorulursa `meeting_status` kullan. Hata varsa gerçek hata mesajını ilet; aynı dosyayla
    yeniden çağırmak kaldığı yerden devam eder.
 4. Telegram 20 MB'tan büyük dosyayı indiremez. Dosya gelmediyse kullanıcıya şunu öner:
