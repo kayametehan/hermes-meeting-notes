@@ -22,6 +22,18 @@ REQUIREMENTS = ["faster-whisper>=1.1,<2", "av>=11,<17"]
 IS_WIN = os.name == "nt"
 
 
+_DROP_ENV = ("PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "VIRTUAL_ENV", "PYTHONEXECUTABLE",
+             "__PYVENV_LAUNCHER__", "PYTHONSAFEPATH", "PYTHONUSERBASE")
+
+
+def clean_env() -> dict:
+    """Hermes'in gömülü Python'u kendi PYTHONHOME/PYTHONPATH'ini çocuk süreçlere sızdırabilir; venv Python'u
+    bununla bozulur (içe aktarma hatası). Alt süreçlere temiz ortam veriyoruz."""
+    env = {k: v for k, v in os.environ.items() if k.upper() not in _DROP_ENV}
+    env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", HF_HUB_DISABLE_TELEMETRY="1")
+    return env
+
+
 def venv_dir() -> Path:
     return store.data_dir() / "venv"
 
@@ -41,7 +53,7 @@ def import_error() -> str:
     if not p.exists():
         return "venv yok: " + str(p)
     r = subprocess.run([str(p), "-c", "import faster_whisper, av"], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=clean_env())
     return "" if r.returncode == 0 else (r.stderr or r.stdout)[-1500:]
 
 
@@ -51,7 +63,8 @@ def is_ready() -> bool:
 
 def _run(cmd, log):
     log("$ " + " ".join(str(c) for c in cmd))
-    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                       encoding="utf-8", errors="replace", env=clean_env())
     if r.returncode != 0:
         raise RuntimeError(f"Komut başarısız ({r.returncode}): {' '.join(map(str, cmd))}\n{r.stdout[-1500:]}")
 
@@ -80,14 +93,16 @@ def setup(log=print) -> None:
     vd = venv_dir()
     uv = shutil.which("uv")
     if uv:
-        _run([uv, "venv", "--python", "3.12", "--seed", str(vd)], log)
+        if not venv_python().exists():  # varsa yeniden yaratma (uv "already exists" hatası verir)
+            _run([uv, "venv", "--python", "3.12", "--seed", str(vd)], log)
         _run([uv, "pip", "install", "--python", str(venv_python())] + REQUIREMENTS, log)
     else:
         py = _find_python()
         if not py:
             raise RuntimeError("Python 3.10-3.13 bulunamadı ve 'uv' kurulu değil. "
                                "Windows: winget install astral-sh.uv   |   macOS/Linux: brew install uv")
-        _run(py + ["-m", "venv", str(vd)], log)
+        if not venv_python().exists():
+            _run(py + ["-m", "venv", str(vd)], log)
         _run([str(venv_python()), "-m", "pip", "install", "-q", "--upgrade", "pip"], log)
         _run([str(venv_python()), "-m", "pip", "install", "-q"] + REQUIREMENTS, log)
     err = import_error()
@@ -116,7 +131,7 @@ def transcribe_file(audio: str, out_jsonl: Path, on_progress=None, cfg: dict | N
     cmd = [str(venv_python()), str(Path(__file__).with_name("worker.py")), audio, str(out_jsonl),
            "--model", resolve_model(cfg), "--language", cfg.get("language", "tr"),
            "--device", cfg.get("device", "auto"), "--beam", str(cfg.get("beam_size", 5))]
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", HF_HUB_DISABLE_TELEMETRY="1")
+    env = clean_env()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                          encoding="utf-8", errors="replace", env=env)
     tail = []
